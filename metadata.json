@@ -1,0 +1,6 @@
+{
+  "name": "KIDS HORROR ADVENTURE",
+  "description": "Game edukasi petualangan horor kartun interaktif untuk anak usia TK A: Berani Belajar, Berani Hebat!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
