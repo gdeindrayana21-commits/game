@@ -38,8 +38,10 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
   const [isStageDone, setIsStageDone] = useState(false);
   const [isAllCompleted, setIsAllCompleted] = useState(false);
 
-  // User traced points on the current stage
-  const tracedPointsRef = useRef<{ x: number; y: number }[]>([]);
+  // User traced strokes on the current stage (array of strokes, each stroke is an array of points)
+  const tracedStrokesRef = useRef<{ x: number; y: number }[][]>([]);
+  // Covered segment indices of the target curve
+  const coveredSegmentsRef = useRef<boolean[]>([]);
 
   const stage = LINE_STAGES[currentStageIdx];
 
@@ -50,7 +52,7 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
     const startX = paddingX;
     const endX = w - paddingX;
     const centerY = h / 2;
-    const steps = 180;
+    const steps = 140;
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
@@ -113,10 +115,9 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
     ctx.stroke();
     ctx.restore();
 
-    // 2. Draw User Traced Glowing Green Line
-    if (tracedPointsRef.current.length > 1) {
+    // 2. Draw User Traced Glowing Green Strokes (all strokes user has drawn)
+    if (tracedStrokesRef.current.length > 0) {
       ctx.save();
-      ctx.beginPath();
       ctx.setLineDash([]);
       ctx.strokeStyle = '#4ade80';
       ctx.lineWidth = 14;
@@ -125,11 +126,16 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
       ctx.shadowColor = '#22c55e';
       ctx.shadowBlur = 12;
 
-      ctx.moveTo(tracedPointsRef.current[0].x, tracedPointsRef.current[0].y);
-      for (let i = 1; i < tracedPointsRef.current.length; i++) {
-        ctx.lineTo(tracedPointsRef.current[i].x, tracedPointsRef.current[i].y);
-      }
-      ctx.stroke();
+      tracedStrokesRef.current.forEach((stroke) => {
+        if (stroke.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(stroke[0].x, stroke[0].y);
+        for (let i = 1; i < stroke.length; i++) {
+          ctx.lineTo(stroke[i].x, stroke[i].y);
+        }
+        ctx.stroke();
+      });
+
       ctx.restore();
     }
   }, [stage.id, getCurvePoints]);
@@ -161,7 +167,8 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
 
   // Reset stage
   const resetStage = () => {
-    tracedPointsRef.current = [];
+    tracedStrokesRef.current = [];
+    coveredSegmentsRef.current = [];
     setProgress(0);
     setIsDrawing(false);
     setIsStageDone(false);
@@ -184,17 +191,21 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
     const y = clientY - rect.top;
 
     const targetPoints = getCurvePoints(stage.id, rect.width, rect.height);
-    const startPt = targetPoints[0];
+    
+    // Check distance to any point along the curve (must be near the dotted line)
+    let minDist = Infinity;
+    targetPoints.forEach((pt) => {
+      const d = Math.hypot(x - pt.x, y - pt.y);
+      if (d < minDist) minDist = d;
+    });
 
-    // Check if starting near the zombie (within 70px)
-    const distToStart = Math.hypot(x - startPt.x, y - startPt.y);
-    if (distToStart < 75 || tracedPointsRef.current.length === 0) {
+    if (minDist < 50) {
       setIsDrawing(true);
-      tracedPointsRef.current = [{ x, y }];
+      tracedStrokesRef.current.push([{ x, y }]);
       sound.playClick();
       drawCanvas();
     } else {
-      setWarning('Mulai dari Zombie di sebelah kiri ya! 🧟');
+      setWarning('Sentuh garis putus-putus untuk mulai menebalkan! ✏️');
       setTimeout(() => setWarning(null), 1500);
     }
   };
@@ -210,40 +221,52 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
 
     const targetPoints = getCurvePoints(stage.id, rect.width, rect.height);
 
+    // Initialize covered segments array if needed
+    if (coveredSegmentsRef.current.length !== targetPoints.length) {
+      coveredSegmentsRef.current = new Array(targetPoints.length).fill(false);
+    }
+
     // Find nearest point on curve
     let minDist = Infinity;
-    let nearestIdx = 0;
-    targetPoints.forEach((pt, idx) => {
+    targetPoints.forEach((pt) => {
       const d = Math.hypot(x - pt.x, y - pt.y);
       if (d < minDist) {
         minDist = d;
-        nearestIdx = idx;
       }
     });
 
     // Tolerance check: max 55px deviation
     if (minDist > 55) {
-      setWarning('Ups! Jangan terlalu jauh dari garis putus-putus ya! 🌟');
+      setWarning('Ups! Ikuti garis putus-putus sampai tebal ya! 🌟');
       sound.playDeadEnd();
       setTimeout(() => setWarning(null), 1200);
       return;
     }
 
-    // Add point
-    tracedPointsRef.current.push({ x, y });
+    // Add point to current stroke
+    const currentStroke = tracedStrokesRef.current[tracedStrokesRef.current.length - 1];
+    if (currentStroke) {
+      currentStroke.push({ x, y });
+    }
     drawCanvas();
 
-    // Calculate progress based on how far along targetPoints we have reached
-    const currentProg = Math.min(100, Math.round((nearestIdx / (targetPoints.length - 1)) * 100));
-    if (currentProg > progress) {
-      setProgress(currentProg);
-    }
+    // Mark covered points along the dotted line
+    targetPoints.forEach((pt, idx) => {
+      if (!coveredSegmentsRef.current[idx]) {
+        const d = Math.hypot(x - pt.x, y - pt.y);
+        if (d < 30) {
+          coveredSegmentsRef.current[idx] = true;
+        }
+      }
+    });
 
-    // Check if reached destination (brain icon)
-    const endPt = targetPoints[targetPoints.length - 1];
-    const distToEnd = Math.hypot(x - endPt.x, y - endPt.y);
+    // Calculate percentage of target points covered
+    const coveredCount = coveredSegmentsRef.current.filter(Boolean).length;
+    const currentProg = Math.min(100, Math.round((coveredCount / targetPoints.length) * 100));
+    setProgress(currentProg);
 
-    if (distToEnd < 45 || currentProg >= 92) {
+    // ONLY declare stage complete when ALL (>=95%) dotted points are actually traced/thickened!
+    if (currentProg >= 95 && !isStageDone) {
       // Finished Stage!
       setIsDrawing(false);
       setIsStageDone(true);
@@ -251,7 +274,7 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
       sound.playCorrect();
       sound.playStar();
 
-      const newCompleted = [...completedStages, currentStageIdx];
+      const newCompleted = [...new Set([...completedStages, currentStageIdx])];
       setCompletedStages(newCompleted);
 
       // Check if all 5 lines done
@@ -294,7 +317,7 @@ export const Mission3Tracing: React.FC<Props> = ({ onComplete, onNextMission }) 
           3. TEBALKAN GARIS!
         </h2>
         <p className="text-xs sm:text-sm text-stone-200 font-medium font-kids">
-          "Tarik garis putus-putus sampai ke otak!"
+          "Tebalkan semua garis putus-putus sampai menyala penuh!"
         </p>
       </div>
 

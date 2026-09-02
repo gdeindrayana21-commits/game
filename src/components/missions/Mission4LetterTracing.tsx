@@ -141,7 +141,10 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
   const [isAllDone, setIsAllDone] = useState(false);
 
   const currentItem = TRACING_ITEMS[activeIdx];
-  const userPointsRef = useRef<{ x: number; y: number }[]>([]);
+  // Multi-stroke drawing: array of strokes (each stroke is an array of points)
+  const userStrokesRef = useRef<{ x: number; y: number }[][]>([]);
+  // Set of target dot indices that have been covered/traced
+  const coveredDotsRef = useRef<Set<number>>(new Set());
 
   // Generate interpolated guide dots from item strokes
   const getInterpolatedTargetDots = useCallback((w: number, h: number) => {
@@ -182,16 +185,16 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
 
     // 1. Draw Dotted Guide Circles
     targetDots.forEach((dot, idx) => {
+      const isCovered = coveredDotsRef.current.has(idx);
       ctx.beginPath();
       ctx.arc(dot.x, dot.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = idx === 0 ? '#facc15' : '#78716c';
+      ctx.fillStyle = isCovered ? '#4ade80' : idx === 0 ? '#facc15' : '#78716c';
       ctx.fill();
     });
 
-    // 2. Draw user traced glowing stroke
-    if (userPointsRef.current.length > 1) {
+    // 2. Draw user traced glowing strokes (supports multiple strokes, e.g. crossbars in A, E, 4)
+    if (userStrokesRef.current.length > 0) {
       ctx.save();
-      ctx.beginPath();
       ctx.strokeStyle = '#38bdf8';
       ctx.lineWidth = 18;
       ctx.lineCap = 'round';
@@ -199,11 +202,16 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
       ctx.shadowColor = '#0284c7';
       ctx.shadowBlur = 10;
 
-      ctx.moveTo(userPointsRef.current[0].x, userPointsRef.current[0].y);
-      for (let i = 1; i < userPointsRef.current.length; i++) {
-        ctx.lineTo(userPointsRef.current[i].x, userPointsRef.current[i].y);
-      }
-      ctx.stroke();
+      userStrokesRef.current.forEach((stroke) => {
+        if (stroke.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(stroke[0].x, stroke[0].y);
+        for (let i = 1; i < stroke.length; i++) {
+          ctx.lineTo(stroke[i].x, stroke[i].y);
+        }
+        ctx.stroke();
+      });
+
       ctx.restore();
     }
   }, [getInterpolatedTargetDots]);
@@ -235,7 +243,8 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
   }, [draw]);
 
   const resetCanvas = () => {
-    userPointsRef.current = [];
+    userStrokesRef.current = [];
+    coveredDotsRef.current = new Set();
     setProgress(0);
     setIsDrawing(false);
     setIsItemDone(false);
@@ -258,7 +267,7 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
     const y = clientY - rect.top;
 
     setIsDrawing(true);
-    userPointsRef.current.push({ x, y });
+    userStrokesRef.current.push([{ x, y }]);
     sound.playClick();
     draw();
   };
@@ -272,23 +281,29 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
     const x = clientX - rect.left;
     const y = clientY - rect.top;
 
-    userPointsRef.current.push({ x, y });
-    draw();
+    const currentStroke = userStrokesRef.current[userStrokesRef.current.length - 1];
+    if (currentStroke) {
+      currentStroke.push({ x, y });
+    }
 
     // Check hit coverage of target dots
     const targetDots = getInterpolatedTargetDots(rect.width, rect.height);
-    let hitCount = 0;
-    targetDots.forEach((dot) => {
-      const isHit = userPointsRef.current.some(
-        (p) => Math.hypot(p.x - dot.x, p.y - dot.y) < 28
-      );
-      if (isHit) hitCount++;
+    targetDots.forEach((dot, idx) => {
+      if (!coveredDotsRef.current.has(idx)) {
+        const d = Math.hypot(x - dot.x, y - dot.y);
+        if (d < 28) {
+          coveredDotsRef.current.add(idx);
+        }
+      }
     });
 
-    const currentProg = Math.min(100, Math.round((hitCount / targetDots.length) * 100));
+    draw();
+
+    const currentProg = Math.min(100, Math.round((coveredDotsRef.current.size / targetDots.length) * 100));
     setProgress(currentProg);
 
-    if (currentProg >= 75 && !isItemDone) {
+    // ONLY declare item complete when ALL (>=95%) dotted circles are covered/thickened!
+    if (currentProg >= 95 && !isItemDone) {
       // Completed current letter/number!
       setIsItemDone(true);
       setIsDrawing(false);
@@ -333,7 +348,7 @@ export const Mission4LetterTracing: React.FC<Props> = ({ onComplete, onNextMissi
           4. TEBALKAN HURUF & ANGKA!
         </h2>
         <p className="text-xs sm:text-sm text-stone-200 font-medium font-kids">
-          "Ayo belajar huruf dan angka!"
+          "Tebalkan semua titik putus-putus sampai menyala hijau!"
         </p>
       </div>
 
